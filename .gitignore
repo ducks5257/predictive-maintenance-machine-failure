@@ -1,5 +1,9 @@
-# Raw datasets stay local. The backend still needs the history CSVs at runtime.
-data/
+# Track only the compact runtime data; raw datasets and failures stay local.
+/data/*
+!/data/PdM_telemetry.csv
+!/data/PdM_errors.csv
+!/data/PdM_maint.csv
+!/data/PdM_machines.csv
 
 # Python environments, caches, and notebook checkpoints
 venv/
