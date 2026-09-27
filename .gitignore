@@ -1,7 +1,43 @@
+# Raw datasets stay local. The backend still needs the history CSVs at runtime.
 data/
-.ipynb_checkpoints/
-__pycache__/
-*.pyc
-.env
+
+# Python environments, caches, and notebook checkpoints
 venv/
 .venv/
+env/
+ENV/
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Frontend dependencies and generated builds
+node_modules/
+dist/
+build/
+.npm-cache/
+
+# Local secrets and settings; keep the safe configuration example.
+.env
+.env.*
+!.env.example
+*.local
+
+# IDE files and temporary output
+.vscode/
+.idea/
+*.code-workspace
+*.suo
+*.user
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+*.temp
+*.bak
+*~
+.frontend-checks/
