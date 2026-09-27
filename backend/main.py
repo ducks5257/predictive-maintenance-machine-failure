@@ -15,11 +15,13 @@ app = FastAPI(
     description="Frozen model estimates using each machine's stored history.",
 )
 
-# Add the deployed frontend URL here when it is available.
-allowed_origins = ["http://localhost:5173"]
+origins = [
+    "http://localhost:5173",
+    "https://predictive-machine-maintainance.netlify.app",
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
+    allow_origins=origins,
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
