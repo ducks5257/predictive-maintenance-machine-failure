@@ -1,5 +1,6 @@
 """Load the frozen deployment objects once and predict from stored history."""
 
+import logging
 from operator import itemgetter
 from pathlib import Path
 
@@ -12,12 +13,28 @@ import shap
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 MODELS_DIR = PROJECT_ROOT / "models"
 DATA_DIR = PROJECT_ROOT / "data"
+# Temporary diagnostics use Uvicorn's configured logger so Render captures them.
+logger = logging.getLogger("uvicorn.error.inference")
 
 # Module imports happen once per backend process, not once per request.
 smote_xgb = joblib.load(MODELS_DIR / "failure_xgb_model.pkl")
 feature_imputer = joblib.load(MODELS_DIR / "failure_imputer.pkl")
 feature_columns = joblib.load(MODELS_DIR / "failure_feature_columns.pkl")
 selected_smote_threshold = joblib.load(MODELS_DIR / "failure_threshold.pkl")
+
+
+def validate_failure_schema():
+    """Reject incompatible saved artifacts instead of silently imputing features."""
+    columns = list(feature_columns)
+    if len(columns) != 23 or len(set(columns)) != 23:
+        raise RuntimeError("The failure model requires exactly 23 unique features.")
+    if columns != list(smote_xgb.feature_names_in_) or columns != list(
+        feature_imputer.feature_names_in_
+    ):
+        raise RuntimeError("Failure model, imputer and feature_columns must have the same order.")
+
+
+validate_failure_schema()
 
 isolation_forest = joblib.load(MODELS_DIR / "anomaly_isolation_forest.pkl")
 anomaly_imputer = joblib.load(MODELS_DIR / "anomaly_imputer.pkl")
@@ -65,7 +82,9 @@ def build_machine_features(machine_id, volt, rotate, pressure, vibration):
     if len(machine_metadata) != 1:
         raise ValueError("The machine must have exactly one metadata record.")
 
-    machine_history = telemetry.loc[telemetry["machineID"] == machine_id]
+    machine_history = telemetry.loc[telemetry["machineID"] == machine_id].sort_values(
+        "datetime"
+    )
     if machine_history.empty:
         raise ValueError("The selected machine has no stored telemetry.")
     prediction_time = machine_history["datetime"].max() + pd.Timedelta(hours=1)
@@ -87,8 +106,10 @@ def build_machine_features(machine_id, volt, rotate, pressure, vibration):
     if not np.isfinite(age):
         raise ValueError("The selected machine's age is missing or invalid.")
 
-    # The 24-reading window includes the new reading and up to 23 earlier hours.
+    # Deployment needs the full 24-reading window: 23 real rows plus the new input.
     history = machine_history.tail(23)
+    if len(history) != 23:
+        raise ValueError("The selected machine needs 23 stored hourly telemetry readings.")
     expected_hours = pd.date_range(
         end=prediction_time - pd.Timedelta(hours=1), periods=len(history), freq="h"
     )
@@ -104,15 +125,9 @@ def build_machine_features(machine_id, volt, rotate, pressure, vibration):
     for sensor in sensors:
         mean = window_values[sensor].mean()
         features[f"{sensor}_24h_mean"] = mean
-        if len(window_values) > 1:
-            features[f"{sensor}_24h_std"] = window_values[sensor].std(ddof=1)
-        else:
-            features[f"{sensor}_24h_std"] = 0.0
+        features[f"{sensor}_24h_std"] = window_values[sensor].std(ddof=1)
         features[f"{sensor}_vs_24h_mean"] = current[sensor] - mean
-        if len(history) >= 6:
-            features[f"{sensor}_6h_change"] = current[sensor] - past_values[sensor].iloc[-6]
-        else:
-            features[f"{sensor}_6h_change"] = 0.0
+        features[f"{sensor}_6h_change"] = current[sensor] - past_values[sensor].iloc[-6]
 
     # Match the notebook's boundaries: errors in (t-24h, t], maintenance <= t.
     recent_errors = errors.loc[
@@ -133,12 +148,26 @@ def build_machine_features(machine_id, volt, rotate, pressure, vibration):
             prediction_time - last_maintenance
         ).total_seconds() / 3600
 
-    return pd.DataFrame([features], columns=feature_columns)
+    if set(features) != set(feature_columns):
+        raise RuntimeError("Engineered features do not match the saved failure feature schema.")
+    feature_row = pd.DataFrame([features]).loc[:, feature_columns]
+    logger.info(
+        "Inference debug machine_id=%s prediction_time=%s history_rows=%s "
+        "history_start=%s history_end=%s engineered_features=%s",
+        machine_id,
+        prediction_time.isoformat(),
+        len(history),
+        history["datetime"].iloc[0].isoformat(),
+        history["datetime"].iloc[-1].isoformat(),
+        feature_row.iloc[0].to_dict(),
+    )
+    return feature_row
 
 
 def predict_machine_health(machine_id, volt, rotate, pressure, vibration):
     """Return separate failure, anomaly, RUL, and local SHAP outputs."""
     feature_row = build_machine_features(machine_id, volt, rotate, pressure, vibration)
+    feature_row = feature_row.loc[:, feature_columns]
 
     # Use exactly the same float32 failure input for prediction and SHAP.
     failure_input = pd.DataFrame(
@@ -146,8 +175,20 @@ def predict_machine_health(machine_id, volt, rotate, pressure, vibration):
         columns=feature_columns,
         index=feature_row.index,
     ).astype("float32")
+    failure_input = failure_input.loc[:, feature_columns]
+    logger.info(
+        "Inference debug machine_id=%s feature_order=%s final_model_features=%s",
+        machine_id,
+        list(failure_input.columns),
+        failure_input.iloc[0].to_dict(),
+    )
     failure_class_index = list(smote_xgb.classes_).index(1)
     failure_risk = float(smote_xgb.predict_proba(failure_input)[0, failure_class_index])
+    logger.info(
+        "Inference debug machine_id=%s predicted_failure_probability=%.10g",
+        machine_id,
+        failure_risk,
+    )
     failure_prediction = "Yes" if failure_risk >= selected_smote_threshold else "No"
 
     anomaly_features = feature_row.loc[:, anomaly_feature_columns]

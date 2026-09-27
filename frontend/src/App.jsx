@@ -328,8 +328,8 @@ export default function App() {
                 <div>
                   <h2 id="input-title">Machine input</h2>
                   <p>
-                    Enter current readings. Historical context is added
-                    automatically.
+                    Failure risk is calculated using the current sensor readings
+                    together with the selected machine's recent operating history.
                   </p>
                 </div>
               </div>
@@ -443,6 +443,15 @@ export default function App() {
             </span>
           </div>
 
+          {result && (
+            <p className="results-context">
+              Your entries represent the machine's latest reading and are combined
+              with the previous 23 hours of real machine history. One abnormal
+              current reading does not necessarily indicate immediate high failure
+              risk.
+            </p>
+          )}
+
           <div className="metrics-grid">
             <article
               className={`panel metric-card failure-card ${highRisk ? "attention" : ""}`}
@@ -452,16 +461,16 @@ export default function App() {
                 <span className="metric-icon">
                   <Icon name="shield" />
                 </span>
-                <h3 id="failure-title">Failure Risk</h3>
+                <h3 id="failure-title">Failure Risk:</h3>
                 <span className="card-index">01</span>
               </div>
               <div className="risk-value">
                 <span>
                   {riskPercent === null
                     ? "—"
-                    : riskPercent > 0 && riskPercent < 0.0001
-                      ? "<0.0001"
-                      : formatNumber(riskPercent, 4)}
+                    : riskPercent > 0 && riskPercent < 0.000001
+                      ? "<0.000001"
+                      : formatNumber(riskPercent, 6)}
                 </span>
                 <small>%</small>
               </div>
